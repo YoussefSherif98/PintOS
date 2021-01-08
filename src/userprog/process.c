@@ -50,6 +50,11 @@ process_execute (const char *file_name)
   //argument passing
   struct arguments args;
   args.argv = argumentsParsing(fn_copy, &args.argc);
+  if (args.argv == NULL) {
+     palloc_free_page (*args.argv);
+      free(args.argv);
+    return TID_ERROR;
+  }
   sema_init(&args.load_child, 0); //initiate the semaphore
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (args.argv[0], PRI_DEFAULT, start_process, &args);
@@ -592,6 +597,10 @@ char **argumentsParsing(char *cmd_line, int *argc)
       arg = strtok_r(NULL, " ", &save_ptr); //arguments of the system call
 
       count++;
+      if (count == 64)
+      {
+        return NULL;
+      }
       if (count == size)
       {
           //doubling the size of the list and reallocating more memory whenever it needs
