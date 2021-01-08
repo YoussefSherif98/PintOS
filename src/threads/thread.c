@@ -109,6 +109,7 @@ void
 thread_start (void) 
 {
   #ifdef USERPROG
+  //initiate both lists
   list_init(&thread_current()->child_processes);
   list_init(&thread_current()->open_files);
   #endif
@@ -207,12 +208,14 @@ thread_create (const char *name, int priority,
   sf->ebp = 0;
 
   #ifdef USERPROG
+  //create communication link between parent and child
   t->parent = thread_current();
   struct child_process *cp = malloc(sizeof(struct child_process));
   cp->tid = t->tid;
   cp->t = t;
-  t->self = cp;
-  list_push_back (&thread_current ()->child_processes, &cp->elem);
+  t->child = cp;
+  //insert child into the list of child processes
+  list_push_back(&thread_current()->child_processes, &cp->elem);
   #endif
 
   /* Add to run queue. */
@@ -478,7 +481,10 @@ init_thread (struct thread *t, const char *name, int priority)
   strlcpy (t->name, name, sizeof t->name);
   t->stack = (uint8_t *) t + PGSIZE;
   t->priority = priority;
-  #ifdef USERPROG 
+  #ifdef USERPROG
+  //default num of file descriptor
+  t->fd_last = 2;
+  //initiate the synchronization semaphore between parent and child
   sema_init(&t->parent_child_synch, 0);
   #endif
   t->magic = THREAD_MAGIC;

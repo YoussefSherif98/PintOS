@@ -2,16 +2,16 @@
 #define USERPROG_SYSCALL_H
 #include <hash.h>
 
-/* Lock used to ensure mutual exclusion for the file system. */
+//lock used for the open file during system calls so no other processes can change it
 extern struct lock files_sync_lock;
-/* Contains fd_num which is a unique number for an image of the file and the file itself. 
-   Each file in the system may have different fd_num for each process currently open it. */
-struct file_descriptor {
-    int fd_num;
-    struct list_elem fd_elem;
+
+//struct contains the file descriptor and pointer to the desired file to open
+struct open_file {
+    int fd;
+    struct list_elem elem;
     struct file *file;
 };
-void sys_exit(int status);
+void exit(int status);
 void syscall_init (void);
 
 #endif /* userprog/syscall.h */

@@ -20,52 +20,13 @@
 #include "devices/timer.h"
 #include "userprog/syscall.h"
 
-/* Used as arguments wrapper for start_process. */
-struct process_args {
-  int argc;
-  char **argv;
-  bool status;
-  struct semaphore wait_load;
-};
-
 static thread_func start_process NO_RETURN;
-static bool load (struct process_args *args, void (**eip) (void), void **esp);
-struct child_process * get_child_process (tid_t pid);
+static bool load (struct arguments *args, void (**eip) (void), void **esp);
+struct child_process * get_child_process (tid_t tid);
 void detach_child_process (struct child_process *cp);
+char **argumentsParsing(char *cmd_line, int *argc);
 
-#define BUFF_SIZE 10    /* Initial buffer size for args */
-
-/* Takes a command as string and splits into strings delimited by whitespaces which are returned as 
-   char** -array of strings- dynamically resized to fit the number of arguments of any command.
-   It additionally takes an integer pointer to return the number of arguments of the current command. */
-char **parse_args(char *line, int *arg_length)
-{
-  // 2D-array to store the splits of line around white spaces.
-  char **args = malloc(BUFF_SIZE * sizeof(char *));
-  char *save_ptr;
-  int curSize = BUFF_SIZE;
-  ASSERT(args != NULL);
-  char delimits[] = " \n'";
-  int it = 0;
-  char *token = strtok_r(line, delimits, &save_ptr);
-  while (token != NULL)
-  {
-      args[it] = token;
-      token = strtok_r(NULL, delimits, &save_ptr);
-
-      it++;
-      if (it == curSize)
-      {
-          // Vector implementation: Multiply each time the size by two and reallocate more memory.
-          curSize *= 2;
-          args = realloc(args, curSize * sizeof(char *));
-          ASSERT(args != NULL);
-      }
-  }
-  *arg_length = it;
-  args[it] = NULL;
-  return args;
-}
+#define BUFFER_SIZE 10    //starting buffer size for arguments
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -86,19 +47,17 @@ process_execute (const char *file_name)
 
   ASSERT(file_name != NULL);
   
-  /* Create a process_args struct 
-  with parsed arguments and intialized semaphore to wait for child loading. */
-  struct process_args args;
-  args.argv = parse_args(fn_copy, &args.argc);
-  sema_init(&args.wait_load, 0);
+  //argument passing
+  struct arguments args;
+  args.argv = argumentsParsing(fn_copy, &args.argc);
+  sema_init(&args.load_child, 0); //initiate the semaphore
   /* Create a new thread to execute FILE_NAME. */
   tid = thread_create (args.argv[0], PRI_DEFAULT, start_process, &args);
 
-  /* Wait for child till it completes loading or fails,
-  so that loading status can be returned to the parent process. */
-  sema_down(&args.wait_load);
+  //parent sleeps and wait for child till it loads
+  sema_down(&args.load_child);
   
-  /* If child loading fails. */
+  //loading failed
   if (!args.status) {
     return TID_ERROR;
   }
@@ -110,7 +69,7 @@ process_execute (const char *file_name)
 static void
 start_process (void *args_)
 {
-  struct process_args *args = (struct process_args *) args_;
+  struct arguments *args = (struct arguments *) args_;
   struct intr_frame if_;
   bool *success = &args->status;
 
@@ -121,17 +80,19 @@ start_process (void *args_)
   if_.eflags = FLAG_IF | FLAG_MBS;
   *success = load (args, &if_.eip, &if_.esp);
 
-  /* Wake up the parent since load is done. */
-  sema_up(&args->wait_load);
+  //wake up the parent
+  sema_up(&args->load_child);
 
+  //free the arguments list as it is already in the child's stack
   palloc_free_page (*args->argv);
   free(args->argv);
 
-  /* If load failed, quit. */
   if (!*success)
-    thread_exit ();
-
-  /* Initialize the hash tables for open files and children. */
+  {
+    thread_exit (); //exit because load failed
+  }
+  
+  //initialization
   #ifdef USERPROG
   list_init(&thread_current()->child_processes);
   list_init(&thread_current()->open_files);
@@ -156,22 +117,20 @@ start_process (void *args_)
 int
 process_wait (tid_t child_tid) 
 {
-  /* Get the record of the thread child_tid from children hashtable. */
-  struct child_process* cp = get_child_process(child_tid);
-  
-  /* If thread child_tid is not a direct child of the current thread. */
+  //find the child process in the parent's list that has the same tid 
+  struct child_process *cp = get_child_process(child_tid);
+
   if(cp == NULL || cp == 0) {
     return -1;
   }
 
-  /* If the child->ptr is NULL means that the child terminated 
-  and child struct is just a record. */  
+  //the thread doesn't exist anymore 
   if(cp->t != NULL) {
-    sema_down(&(cp->t->parent_child_synch));
+    sema_down(&(cp->t->parent_child_synch)); //child sleeps until parent finishes executing
   }
-  int exit_status = cp->exit_status;
-  detach_child_process(cp);
-  return exit_status;
+  int status = cp->status;
+  remove_child_process(cp); //remove the child from the list and free from memory
+  return status;
 }
 
 /* Free the current process's resources. */
@@ -181,8 +140,27 @@ process_exit (void)
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  sema_up(&thread_current()->parent_child_synch);
-  
+  sema_up(&thread_current()->parent_child_synch); //wake up the child as parent finished
+  lock_acquire(&files_sync_lock);
+  remove_open_file (-1); //free all files in critical section
+  file_close(thread_current()->executable_file); //close the open file
+  lock_release(&files_sync_lock);
+
+  struct list_elem *e;
+  struct child_process *cp;
+  //remove the communication link between parent and child
+  for (e = list_begin (&cur->child_processes); e != list_end (&cur->child_processes); e = list_next (e))
+    {
+      cp = list_entry (e, struct child_process, elem);
+      struct thread* thread = cp->t;
+      if (thread != NULL)
+      {
+        thread->parent = NULL;
+        thread->child = NULL;
+      }
+      remove_child_process (cp); //remove the child from the list and free from memory
+    }
+
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -291,7 +269,7 @@ static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
    and its initial stack pointer into *ESP.
    Returns true if successful, false otherwise. */
 bool
-load (struct process_args *args, void (**eip) (void), void **esp) 
+load (struct arguments *args, void (**eip) (void), void **esp) 
 {
   struct thread *t = thread_current ();
   struct Elf32_Ehdr ehdr;
@@ -306,7 +284,7 @@ load (struct process_args *args, void (**eip) (void), void **esp)
     goto done;
   process_activate ();
 
-  /* Open executable file. */
+  //open the currently executed file
   lock_acquire(&files_sync_lock);
   file = filesys_open (args->argv[0]);
   lock_release(&files_sync_lock);
@@ -317,7 +295,7 @@ load (struct process_args *args, void (**eip) (void), void **esp)
       goto done; 
     }
     thread_current()->executable_file = file;
-    /* Deny write to executable file. */
+    // deny write to the executed file
     file_deny_write(file);
   /* Read and verify executable header. */
   if (file_read (file, &ehdr, sizeof ehdr) != sizeof ehdr
@@ -516,7 +494,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp, char **args, int len) 
+setup_stack (void **esp, char **argv, int argc) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -530,48 +508,49 @@ setup_stack (void **esp, char **args, int len)
       else
         palloc_free_page (kpage);
     }
+    //argument passing, storing arguments in the child's stack
     if (success)
     {
-      /* Writing each argument (including the executable name) in reverse order
-         as well as in reverse for each string to the stack. Additionally
-         we save the address of each string written. */
+      
       int sum = 0;
-      int address[len];
-      for (int it = len - 1; it >= 0; it--)
+      int addresses[argc];
+      int i;
+      // 1. Writing each argument
+      for (i = argc - 1; i >= 0; i--)
       {
-        int arg_len = strlen(args[it]) + 1;
-        sum += arg_len;
-        *esp -= arg_len;
-        address[it] = *esp;
-        memcpy(*esp, args[it], arg_len);
+        int length = strlen(argv[i]) + 1;
+        sum += length;
+        *esp -= length;
+        addresses[i] = *esp;
+        memcpy(*esp, argv[i], length);
       }
 
-      /* Writing necessary number of 0s to word alight to 4 bytes. */
-      int padding_bytes = (4 - sum % 4) % 4;
-      *esp -= padding_bytes;
-      memset(*esp, 0, padding_bytes);
+      // 2. Word Align
+      int word_align  = (4 - sum % 4) % 4;
+      *esp -= word_align ;
+      memset(*esp, 0, word_align );
 
-      /* The null pointer sentinel ensures that argv[argc] is a null pointer, as required
-         by C standard. */
+      // 3. argv[argc] --> 4 bytes of 0's
       *esp -= sizeof(int);
       memset(*esp, 0, sizeof(int));
 
-      /* Write the addresses pointing to each of the arguments. */
-      for (int it = len - 1; it >= 0; it--)
+      // 4. Addresses pointing to each of the argument
+      for (i = argc - 1; i >= 0; i--)
       {
         *esp -= sizeof(char *);
-        memcpy(*esp, &address[it], sizeof(char *));
+        memcpy(*esp, &addresses[i], sizeof(char *));
       }
-      /* Write the address of argv[0]. This will be a char**. */
+
+      // 5. Address of argv
       *esp -= sizeof(char **);
-      void *ptr = *esp + sizeof(char *);
-      memcpy(*esp, &ptr, sizeof(char **));
+      void *temp = *esp + sizeof(char *);
+      memcpy(*esp, &temp, sizeof(char **));
 
-      /* Write the number of arguments (argc). */
+      // 6. Number of arguments (argc) spanning over 4 bytes
       *esp -= sizeof(int);
-      memcpy(*esp, &len, sizeof(int));
+      memcpy(*esp, &argc, sizeof(int));
 
-      /* Write a NULL pointer as the return address. This will be a void*. */
+      // 7. Fake Return address
       *esp -= sizeof(void *);
       memset(*esp, 0, sizeof(void *));
     }
@@ -598,23 +577,86 @@ install_page (void *upage, void *kpage, bool writable)
           && pagedir_set_page (t->pagedir, upage, kpage, writable));
 }
 
-struct child_process * get_child_process (tid_t tid)
+char **argumentsParsing(char *cmd_line, int *argc)
+{
+  // list of arguments
+  char **argv = malloc(BUFFER_SIZE * sizeof(char *));
+  char *save_ptr;
+  int size = BUFFER_SIZE;
+  ASSERT(argv != NULL);
+  int count = 0;
+  char *arg = strtok_r(cmd_line, " ", &save_ptr); //the system call
+  while (arg != NULL)
+  {
+      argv[count] = arg;
+      arg = strtok_r(NULL, " ", &save_ptr); //arguments of the system call
+
+      count++;
+      if (count == size)
+      {
+          //doubling the size of the list and reallocating more memory whenever it needs
+          size *= 2;
+          argv = realloc(argv, size * sizeof(char *));
+          ASSERT(argv != NULL);
+      }
+  }
+  *argc = count;
+  argv[count] = NULL;
+  return argv;
+}
+
+struct child_process * get_child_process (tid_t tid) //get the desired child from the list of child processes
 {
   struct thread *cur = thread_current ();
-  struct list_elem *e;
+  struct list_elem *el;
   struct child_process *cp;
 
-  for (e = list_begin (&cur->child_processes); e != list_end (&cur->child_processes); e = list_next (e))
+  for (el = list_begin (&cur->child_processes); el != list_end (&cur->child_processes); el = list_next (el)) //traverse the list
     {
-      cp = list_entry (e, struct child_process, elem);
-      if (tid == cp->tid)
+      cp = list_entry (el, struct child_process, elem);
+      if (tid == cp->tid) //find the exact child
         return cp;
     }
   return 0;
 }
 
-void detach_child_process (struct child_process *cp)
+void remove_child_process (struct child_process *cp) //remove the child comepletely from the list and free from memory
 {
   list_remove (&cp->elem);
   free (cp);
+}
+
+struct open_file * get_open_file (int fd)  //get the desired file from the list of open files
+{
+  struct thread *t = thread_current ();
+  struct list_elem *e;
+  struct open_file *of;
+
+  for (e = list_begin (&t->open_files); e != list_end (&t->open_files); e = list_next (e)) //traverse the list
+    {
+      of = list_entry (e, struct open_file, elem);
+      if (fd == of->fd) //find the exact file
+        return of;
+    }
+  return 0;
+}
+
+void remove_open_file (int fd) //remove the file comepletely from the list and free from memory
+{
+  struct thread *t = thread_current();
+  struct list_elem *e;
+  struct open_file *of;
+
+  for (e = list_begin (&t->open_files); e != list_end (&t->open_files); e = list_next (e)) //traverse the list
+    {
+      of = list_entry (e, struct open_file, elem);
+      if (fd == of->fd || fd == -1) //find the exact file of delete every file in case of -1
+        {
+          file_close (of->file);
+          list_remove (&of->elem);
+          free (of);
+          if (fd != -1)
+            return;
+        }
+    }
 }

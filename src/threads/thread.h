@@ -100,16 +100,11 @@ struct thread
 #ifdef USERPROG
    /* Owned by userprog/process.c. */
    uint32_t *pagedir;                  /* Page directory. */
-   //struct hash child_processes;               /* Hash table of children that the thread has. */
    struct thread *parent;              /* Pointer to thread's parent. */
    struct semaphore parent_child_synch;        /* Semaphore to wait on a child. */
-   struct child_process* self;                 /* Pointer to child struct corresponding to that thread. */
-   //struct hash open_files;           /* Hash table containing all open files. */
+   struct child_process* child;                 /* Pointer to child struct corresponding to that thread. */
    struct file* executable_file;             /* Pointer to it's executable file. */
-   //bool child_creation_success;         /* Indicates whether child creation succeeded. */
-   //int child_status;                    /* */
-   //tid_t waiting_on;
-   //int fd_last;                         /* Last file descriptor created. */
+   int fd_last;                         /* Last file descriptor (open_file) created. */
    struct list open_files;              /* List of open files by this thread. */
    struct list child_processes;         /* List of this thread's children. */
 #endif
