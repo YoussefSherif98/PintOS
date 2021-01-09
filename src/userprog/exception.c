@@ -4,6 +4,7 @@
 #include "userprog/gdt.h"
 #include "threads/interrupt.h"
 #include "threads/thread.h"
+#include "syscall.h"
 
 /* Number of page faults processed. */
 static long long page_fault_cnt;
@@ -89,7 +90,7 @@ kill (struct intr_frame *f)
       printf ("%s: dying due to interrupt %#04x (%s).\n",
               thread_name (), f->vec_no, intr_name (f->vec_no));
       intr_dump_frame (f);
-      thread_exit (); 
+      exit (-1); 
 
     case SEL_KCSEG:
       /* Kernel's code segment, which indicates a kernel bug.
@@ -104,7 +105,7 @@ kill (struct intr_frame *f)
          kernel. */
       printf ("Interrupt %#04x (%s) in unknown segment %04x\n",
              f->vec_no, intr_name (f->vec_no), f->cs);
-      thread_exit ();
+      exit (-1);
     }
 }
 
@@ -148,6 +149,15 @@ page_fault (struct intr_frame *f)
   write = (f->error_code & PF_W) != 0;
   user = (f->error_code & PF_U) != 0;
 
+   /* Exit normally without panic if page fault was invoked from kernel program. */
+   if (!user) {
+      /* Set eip to the next instruction address saved in eax and 
+         set eax i.e the return value to -1 to indicate failure. */
+      f->eip = f->eax;
+      f->eax = 0xffffffff;
+      return;
+   }
+
   /* To implement virtual memory, delete the rest of the function
      body, and replace it with code that brings in the page to
      which fault_addr refers. */
@@ -156,6 +166,6 @@ page_fault (struct intr_frame *f)
           not_present ? "not present" : "rights violation",
           write ? "writing" : "reading",
           user ? "user" : "kernel");
-  kill (f);
+   kill(f);
 }
 

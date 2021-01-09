@@ -1,0 +1,175 @@
+		     +--------------------------+
+       	       	     |		CS 140		|
+		     | PROJECT 2: USER PROGRAMS	|
+		     | 	   DESIGN DOCUMENT     	|
+		     +--------------------------+
+
+---- GROUP ----
+
+>> Fill in the names and email addresses of your group members.
+
+Ramez Soliman <ramezmaher@hotmail.com>
+Seif Ehab <seif_hunterman@yahoo.com>
+Abdelrahman Adel <A.adel.a.fattah@gmail.com>
+Youssef Sherif <es-youssefsherif2022@alexu.edu.eg>
+
+---- PRELIMINARIES ----
+
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+			   ARGUMENT PASSING
+			   ================
+
+---- DATA STRUCTURES ----
+
+>> A1: struct arguments {
+  int argc;
+  char **argv;
+  bool status;
+  struct semaphore load_child;
+};
+Used as a container for the arguments during argument passing by saving them
+for pushing into the child's stack.
+It contains a list of the arguments, number of arguments, status and a synchronization
+semaphore for the parent to wait until arguments are loaded into the child's stack.
+
+>>BUFFER_SIZE 10
+Starting buffer size for the arguments
+
+
+---- ALGORITHMS ----
+
+>> A2: After blocking the parent and waiting on the child to load, start by parsing
+the arguments by extracting the system call (first argument) using strtok_r and 
+whit space as delimeter then parsing each argument separated by white space and
+saving them into list of strings argv then save the number of arguments parsed.
+The arguments are stored in the list by its extracted order from argument parsing
+but when it is pushed to the stack we write each argument in reverse order and decrement
+the pointer then write the necessary number of 0s to word-align to 4 bytes after that
+write the last argument (4 bytes of 0s) and then write the addresses pointing to each
+argument and address of argv then argc which is number of arguments and finish it with NULL
+pointer as a fake return address.
+We avoid overflowing the stack page by setting a limit of 64 arguments for the system call
+if it exceeds the number we free argv, exit the thread and return PID_ERROR.
+
+
+---- RATIONALE ----
+
+>> A3: Because strtok_r uses an extra argument for saving the context of tockenizing
+ (position of the next argument) which makes it safer to use.
+
+>> A4: It optimizes the kernel performance and makes sure of the validation of the
+argument passed by the user from being malicious.
+
+			     SYSTEM CALLS
+			     ============
+
+---- DATA STRUCTURES ----
+
+>> B: struct child_process {
+    tid_t tid;
+    struct thread *t;
+    int status;
+    struct list_elem elem;
+};
+used to contain the thread id of the new child process once it is created with a
+pointer to the child's thread and its status.
+
+struct open_file {
+    int fd;
+    struct list_elem elem;
+    struct file *file;
+};
+used to contain the file descriptor of the open file with a pointer to the file itself.
+
+struct lock files_sync_lock;
+used to synchronize the open file during system calls so no other processes can change it.
+
+struct thread *parent;              /* Pointer to thread's parent. */
+struct semaphore parent_child_synch;        /* Semaphore to wait on a child. */
+struct child_process* child;                 /* Pointer to child struct corresponding to that thread. */
+struct file* executable_file;             /* Pointer to it's executable file. */
+int fd_last;                         /* Last file descriptor (open_file) created. */
+struct list open_files;              /* List of open files by this thread. */
+struct list child_processes;         /* List of this thread's children. */
+
+>> B2: file descriptor is stored inside the open_file struct which also contains
+a pointer to the file currently used which acts as a wrapper which then are stored
+within a list of open_files asscotiated with each thread which makes it unique to each
+process as it is only modified durin an open system call (add to the list) or close
+system call (removed from the list) and also we added a file descriptor counter
+which increments everytime a new fd is created for it to be a unique number for the new fd.
+
+
+---- ALGORITHMS ----
+
+>> B3: Read: only reads from STDIN (as keyboard )as it is impossible to read from STDOUT
+by using the input_getc, if not then we find the suitable file from the list using the given fd
+and read it under a critical section.
+Write: only writes to STDOUT (as monitor)as it is impossible to write to STDIN by using putbuf,
+if not we find the suitable file to open from the list of the current thread using its fd and
+write to the file under a critical section.
+
+>> B4: 
+
+>> B5: The wait system call directly calls process_wait in process.c where we find the suitable child
+from the list of child processes using its tid then we put the child to sleep and wait for its parent ro finish
+in order to wake up and when an exit system call happens it finds the child from the list and wakes up the child.
+
+>> B6: First we validate each argument pulled from the stack and check its position in the memory and during the validation
+if any condition fails we call exit system call with status -1.
+Whenever process_exit gets called it loops through each list removing each element and freeing its block from the memory
+either it is a child process or an open file then destroy the current process's page directory and switch back
+to the kernel-only page directory.
+
+---- SYNCHRONIZATION ----
+
+>> B7: The exec system calls which directly calls the process_execute in process.c which returns TID_ERROR
+if the cmd line = null, number of arguments exceeded the limit or if loading the arguments to the child's
+stack fails.
+Also using the semaphore in the arguments data structure ensures the synchronization between parent and child
+during loading the arguments.
+>> B8: We a use a semaphore stored for each thread to ensures the synchronization between parent and child at all times.
+if p calls wait before c exits it sleeps using the semaphore, after c exits it doesn't need to sleep.
+All resources are freed whenever process_exit is called where it loops through each list removing each element 
+and freeing its block from the memory either it is a child process or an open file then destroy the 
+current process's page directory and switch back to the kernel-only page directory.
+In the rest of the cases P and C simply exit the current thread.
+
+---- RATIONALE ----
+
+>> B9: It was the easiest and most simple way to implement it
+
+>> B10: The open_file structure provides a container for each fd with the corosponding file and also provide an easy
+way to search the list whenever we need an item from the list.
+
+>> B11: No need to change it in my design.
+
+			   SURVEY QUESTIONS
+			   ================
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+>> Any other comments?

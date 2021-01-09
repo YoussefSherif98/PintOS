@@ -2,10 +2,12 @@
 #define THREADS_THREAD_H
 
 #include <debug.h>
+#include <hash.h>
 #include <list.h>
 #include <stdint.h>
-#include "real_num.h"
-#include "synch.h"
+#include "threads/synch.h"
+
+#define USERPROG
 
 /* States in a thread's life cycle. */
 enum thread_status
@@ -25,7 +27,6 @@ typedef int tid_t;
 #define PRI_MIN 0                       /* Lowest priority. */
 #define PRI_DEFAULT 31                  /* Default priority. */
 #define PRI_MAX 63                      /* Highest priority. */
-#define USERPROG
 
 /* A kernel thread or user process.
 
@@ -90,34 +91,24 @@ struct thread
     enum thread_status status;          /* Thread state. */
     char name[16];                      /* Name (for debugging purposes). */
     uint8_t *stack;                     /* Saved stack pointer. */
-    int priority;                       /* Current Priority. */
-    int initial_priority;               /* Initial Priority. */
-    struct list locks_acquired;         /* List of acquired locks by this thread. */
-    struct lock* lock_waiting;          /* Lock blocking this thread. */
+    int priority;                       /* Effective Priority. */
     struct list_elem allelem;           /* List element for all threads list. */
-    int niceness;                       /* Integer between {-20,20}, indicates how likely the thread to give CPU time. */
-    struct real recent_cpu_time;        /* The recent time on cpu spent by thread. */
-    int64_t wakeup;                     //for storing the time for each thread to wake up
+
     /* Shared between thread.c and synch.c. */
     struct list_elem elem;              /* List element. */
-    
 
 #ifdef USERPROG
-    /* Owned by userprog/process.c. */
-    uint32_t *pagedir;                  /* Page directory. */
-#endif
-
-   //userprog
+   /* Owned by userprog/process.c. */
+   uint32_t *pagedir;                  /* Page directory. */
+   struct thread *parent;              /* Pointer to thread's parent. */
+   struct semaphore parent_child_synch;        /* Semaphore to wait on a child. */
+   struct child_process* child;                 /* Pointer to child struct corresponding to that thread. */
+   struct file* executable_file;             /* Pointer to it's executable file. */
+   int fd_last;                         /* Last file descriptor (open_file) created. */
    struct list open_files;              /* List of open files by this thread. */
    struct list child_processes;         /* List of this thread's children. */
-   struct thread* parent;               /* Pointer to parent process. */
-   bool child_creation_success;         /* Indicates whether child creation succeeded. */
-   int child_status;                    /* */
-   tid_t waiting_on;                    /* */
-   struct file* executable_file;         /* */
-   struct semaphore parent_child_synch;  /* Used for parent-child synchronization. */
-   int fd_last;                         /* Last file descriptor created. */
-  
+#endif
+
     /* Owned by thread.c. */
     unsigned magic;                     /* Detects stack overflow. */
   };
@@ -126,11 +117,6 @@ struct thread
    If true, use multi-level feedback queue scheduler.
    Controlled by kernel command-line option "-o mlfqs". */
 extern bool thread_mlfqs;
-
-extern struct list ready_list; /* List of processes in THREAD_READY state, that is, processes
-   that are ready to run but not actually running. */
-
-extern struct list sleeping; //list for threads during sleep time
 
 void thread_init (void);
 void thread_start (void);
@@ -157,29 +143,11 @@ void thread_foreach (thread_action_func *, void *);
 
 int thread_get_priority (void);
 void thread_set_priority (int);
-void thread_donate_priority (struct thread* t);
-void thread_refresh_priority (struct thread* t);
-void thread_remove_lock (struct thread* t, struct lock* lock);
 
-bool list_less (const struct list_elem*, const struct list_elem*, void *);
-
-bool list_less_threads(const struct list_elem *a, const struct list_elem *b, void *aux);
-bool locks_list_less (const struct list_elem* a, const struct list_elem* b, void* aux);
-void thread_add_lock (struct thread* t, struct lock* lock);
-
-/* Methods for 4.4BSD Scheduling */
-
-/* Initial function */
 int thread_get_nice (void);
 void thread_set_nice (int);
 int thread_get_recent_cpu (void);
 int thread_get_load_avg (void);
-
-/* Added functions */
-void calculate_load_avg(void);
-void calculate_recent_cpu_for_all(void);
-void calculate_priority_for_all(void);
-void incremet_recent_cpu(struct thread *cur);
 
 
 #endif /* threads/thread.h */
